@@ -15,10 +15,20 @@ import open_clip
 from PIL import Image
 import math
 from sklearn.cluster import MiniBatchKMeans
+import random
 
 import time
 from functools import wraps
-
+def seed_everything(seed=42):
+ random.seed(seed)
+ os.environ['PYTHONHASHSEED'] = str(seed)
+ np.random.seed(seed)
+ torch.manual_seed(seed)
+ torch.cuda.manual_seed(seed)
+ torch.cuda.manual_seed_all(seed)
+ torch.backends.cudnn.deterministic = True
+ torch.backends.cudnn.benchmark = False
+seed_everything(42) # Ví dụ cho seed bằng 42
 # ======================================================================
 # OPTIMIZATION: Use process pool for CPU-bound tasks
 # ======================================================================
@@ -115,6 +125,11 @@ class VideoInference:
             'max_reference_samples': 10,
         }
 
+    # ======================================================================
+# OPTIMIZED INFERENCE STEP - inference.py (Corrected)
+# ======================================================================
+
+
     def initialize_for_streaming(self, preprocessed_data: Dict, frame_width: int, frame_height: int):
         """
         Initializes the model and state for processing a new video stream.
@@ -127,15 +142,16 @@ class VideoInference:
         reference_crops = preprocessed_data['reference_crops']
         reference_color_features = preprocessed_data['reference_color_features']
 
-            # Store all three components together
+        # CORRECTED CODE
+        # Store all three components together
         self.dynamic_reference_data = [
-        (reference_embeddings[i:i+1], reference_crops[i], reference_color_features[i])
-        for i in range(len(reference_crops))
-    ]
+            (reference_embeddings[i:i+1], reference_crops[i], reference_color_features[i])
+            for i in range(len(reference_crops))
+        ]
 
         # OPTIMIZATION: Pre-stack reference embeddings into single tensor
         self.reference_embeddings_tensor = torch.cat(
-            [emb for emb, _ in self.dynamic_reference_data], dim=0
+            [emb for emb, _, _ in self.dynamic_reference_data], dim=0
         ).to(self.device)
 
         print(f"     Setting class name: '{class_name}' with initial VPE.")
@@ -148,6 +164,7 @@ class VideoInference:
         self.frame_w = frame_width
         self.frame_h = frame_height
         print("Initialization for streaming complete.")
+
 
     # ======================================================================
     # OPTIMIZATION: Vectorized similarity computation
@@ -260,9 +277,16 @@ class VideoInference:
                             if final_similarity_score > self.highest_similarity_score:
                                 self.highest_similarity_score = final_similarity_score
                             
+                            # NEW CODE (CORRECTED)
+
                             best_embedding = self._extract_mobileclip2_embedding_fast(best_crop)
-                            if best_embedding is not None:
-                                self.dynamic_reference_data.append((best_embedding, best_crop))
+                            # NEW: Extract color features for the new reference sample
+                            new_color_features = self._extract_dominant_colors(best_crop)
+                            
+                            # Only add if ALL required data is present
+                            if best_embedding is not None and new_color_features is not None:
+                                # Append the COMPLETE 3-element tuple to maintain consistency
+                                self.dynamic_reference_data.append((best_embedding, best_crop, new_color_features))
                                 
                                 # OPTIMIZATION: Update stacked tensor
                                 self.reference_embeddings_tensor = torch.cat([
@@ -270,6 +294,7 @@ class VideoInference:
                                     best_embedding.to(self.device)
                                 ], dim=0)
                                 
+                                # Manage the size of the dynamic reference set
                                 if len(self.dynamic_reference_data) > self.config['max_reference_samples']:
                                     self.dynamic_reference_data.pop(0)
                                     self.reference_embeddings_tensor = self.reference_embeddings_tensor[1:]
@@ -423,7 +448,51 @@ class VideoInference:
         except Exception as e:
             print(f"Error during MobileCLIP2 embedding extraction: {e}")
             return None
+    def _extract_dominant_colors(self, crop: np.ndarray, num_colors: int = 5) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Extracts dominant colors from a crop using MiniBatchKMeans in LAB color space.
+        
+        Args:
+            crop (np.ndarray): The input image crop (can be BGR or BGRA).
+            num_colors (int): The number of dominant colors to extract.
+            
+        Returns:
+            A tuple containing (dominant_colors_lab, weights) or None if extraction fails.
+        """
+        if crop is None or crop.size == 0:
+            return None
+        try:
+            # Use the alpha channel as a mask if it exists
+            if crop.shape[2] == 4:
+                mask = crop[:, :, 3] > 0
+                if not np.any(mask): return None
+                pixels = crop[:, :, :3][mask]
+            else:
+                pixels = crop.reshape(-1, 3)
 
+            # Ensure there are enough pixels to cluster
+            if pixels.shape[0] < num_colors:
+                return None
+            
+            # Convert to LAB color space
+            lab_pixels = cv2.cvtColor(pixels.reshape(1, -1, 3).astype(np.uint8), cv2.COLOR_BGR2LAB).reshape(-1, 3)
+            
+            # Use MiniBatchKMeans for faster clustering
+            kmeans = MiniBatchKMeans(n_clusters=num_colors, random_state=42, n_init='auto')
+            kmeans.fit(lab_pixels)
+            
+            # Get cluster centers (dominant colors) and their weights
+            unique_labels, counts = np.unique(kmeans.labels_, return_counts=True)
+            weights = counts / counts.sum()
+            dominant_colors_lab = kmeans.cluster_centers_
+            
+            # Sort colors by weight (most dominant first)
+            sorted_indices = np.argsort(weights)[::-1]
+            return dominant_colors_lab[sorted_indices], weights[sorted_indices]
+
+        except Exception as e:
+            print(f"  -> WARNING: Could not extract dominant colors during inference. Error: {e}")
+            return None
     def _calculate_color_similarity(self, crop1: np.ndarray, crop2: np.ndarray, 
                                    num_colors: int = 2, seed: int = 42) -> float:
         """Calculate color similarity using CIEDE2000."""
@@ -735,7 +804,7 @@ if __name__ == "__main__":
     }
 
     inference = VideoInference(
-        yoloe_model_path="yoloe-11l-seg.pt",
+        yoloe_model_path="models/yoloe-11l-seg.pt",
         clip_model_name="MobileCLIP2-S0",
         clip_encoder_path="models/mobileclip2_image_encoder_fp16.pt",
         config=main_config

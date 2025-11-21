@@ -1,0 +1,40 @@
+==================================================
+ANALYSIS REPORT
+==================================================
+
+Video: BlackBox_0
+  - Class: BlackBox
+  - Total Frames: 5443
+  - Frames with Detections: 2505
+  - Detection Rate: 46.02%
+
+Video: BlackBox_1
+  - Class: BlackBox
+  - Total Frames: 5776
+  - Frames with Detections: 2887
+  - Detection Rate: 49.98%
+
+Video: CardboardBox_0
+  - Class: CardboardBox
+  - Total Frames: 5285
+  - Frames with Detections: 1862
+  - Detection Rate: 35.23%
+
+Video: CardboardBox_1
+  - Class: CardboardBox
+  - Total Frames: 5942
+  - Frames with Detections: 2372
+  - Detection Rate: 39.92%
+
+Video: LifeJacket_0
+  - Class: LifeJacket
+  - Total Frames: 8309
+  - Frames with Detections: 4114
+  - Detection Rate: 49.51%
+
+Video: LifeJacket_1
+  - Class: LifeJacket
+  - Total Frames: 4820
+  - Frames with Detections: 2275
+  - Detection Rate: 47.20%
+

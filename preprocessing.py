@@ -18,7 +18,20 @@ from PIL import Image
 # MODIFIED: Changed from KMeans to MiniBatchKMeans for better performance
 from sklearn.cluster import MiniBatchKMeans
 import math
-
+import os
+import torch
+import random
+import numpy as np
+def seed_everything(seed=42):
+ random.seed(seed)
+ os.environ['PYTHONHASHSEED'] = str(seed)
+ np.random.seed(seed)
+ torch.manual_seed(seed)
+ torch.cuda.manual_seed(seed)
+ torch.cuda.manual_seed_all(seed)
+ torch.backends.cudnn.deterministic = True
+ torch.backends.cudnn.benchmark = False
+seed_everything(42) # Ví dụ cho seed bằng 42
 class DataPreprocessor:
     """Handles all preprocessing steps including reference extraction and augmentation."""
     
@@ -390,7 +403,12 @@ class DataPreprocessor:
             torch.save(ref_embeddings, video_output_dir / "reference_embeddings.pt")
             np.save(video_output_dir / "reference_crops.npy", np.array(ref_crops, dtype=object))
             # NEW: Save the extracted color features to a .npy file
-            np.save(video_output_dir / "reference_color_features.npy", np.array(ref_color_features, dtype=object))
+            # THE FIX: This works for any number of samples.
+            color_features_to_save = np.empty(len(ref_color_features), dtype=object)
+            for i, item in enumerate(ref_color_features):
+                color_features_to_save[i] = item
+            
+            np.save(video_output_dir / "reference_color_features.npy", color_features_to_save)
             
             metadata = {
                 'video_id': video_id, 'class_name': class_name, 'video_path': str(video_file),
@@ -426,14 +444,14 @@ class DataPreprocessor:
 
 
 if __name__ == "__main__":
-    clip_encoder_path = "/mlcv2/WorkingSpace/Personal/quannh/Project/Project/ZaloAI2025/RealtimeFewshotDetection_DroneAspective/yoloe/models/mobileclip2_image_encoder_fp16.pt"
+    clip_encoder_path = "models/mobileclip2_image_encoder_fp16.pt"
 
     if not os.path.exists(clip_encoder_path):
         print(f"ERROR: CLIP model file not found at '{clip_encoder_path}'.")
     else:
         preprocessor = DataPreprocessor(
-            yolov8_model_path="yolov8s.pt",
-            yoloe_model_path="yoloe-11l-seg.pt",
+            yolov8_model_path="models/yolov8n.pt",
+            yoloe_model_path="models/yoloe-11l-seg.pt",
             clip_model_name="MobileCLIP2-S0",
             clip_model_path=clip_encoder_path,
             clip_pretrained="dfndr2b",
@@ -446,7 +464,7 @@ if __name__ == "__main__":
             'min_aug_scale': 0.05, 'max_aug_scale': 0.15, 'prefer_high_conf_crops': True,
         }
 
-        dataset_path = "/mlcv2/Datasets/ZaloAI2025/track1/public_test/"
+        dataset_path = "/data/"
         output_dir = "preprocessed_data"
 
         preprocessor.preprocess_dataset(dataset_path, output_dir, config)
